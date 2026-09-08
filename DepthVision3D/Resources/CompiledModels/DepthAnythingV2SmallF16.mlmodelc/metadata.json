@@ -1,0 +1,89 @@
+[
+  {
+    "shortDescription" : "Depth Anything V2 is a state-of-the-art deep learning model for depth estimation.",
+    "metadataOutputVersion" : "3.0",
+    "outputSchema" : [
+      {
+        "height" : "392",
+        "colorspace" : "Grayscale16Half",
+        "isOptional" : "0",
+        "width" : "518",
+        "isColor" : "0",
+        "formattedType" : "Image (Grayscale16Half 518 × 392)",
+        "hasSizeFlexibility" : "0",
+        "type" : "Image",
+        "shortDescription" : "Estimated depth map, as a grayscale output image.",
+        "name" : "depth"
+      }
+    ],
+    "version" : "2.0",
+    "modelParameters" : [
+
+    ],
+    "author" : "Original Paper: Lihe Yang et al. (Depth Anything V2)",
+    "specificationVersion" : 8,
+    "storagePrecision" : "Float16",
+    "license" : "Apache 2",
+    "mlProgramOperationTypeHistogram" : {
+      "Ios17.reshape" : 6,
+      "Ios16.softmax" : 72,
+      "Ios17.transpose" : 23,
+      "Ios17.convTranspose" : 2,
+      "Ios17.expandDims" : 2,
+      "Ios16.reduceMax" : 1,
+      "Ios17.add" : 35,
+      "Ios17.sliceByIndex" : 220,
+      "Ios17.squeeze" : 5,
+      "Ios16.upsampleBilinear" : 6,
+      "Ios17.layerNorm" : 28,
+      "Ios17.conv" : 103,
+      "Ios17.sub" : 1,
+      "Ios16.einsum" : 144,
+      "Ios16.gelu" : 12,
+      "Ios17.realDiv" : 1,
+      "Ios17.concat" : 14,
+      "Ios16.relu" : 16,
+      "Ios17.cast" : 1,
+      "Ios17.mul" : 73
+    },
+    "computePrecision" : "Mixed (Float16, Float32, Int32)",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "14.0",
+      "tvOS" : "17.0",
+      "visionOS" : "1.0",
+      "watchOS" : "10.0",
+      "iOS" : "17.0",
+      "macCatalyst" : "17.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "height" : "392",
+        "colorspace" : "RGB",
+        "isOptional" : "0",
+        "width" : "518",
+        "isColor" : "1",
+        "formattedType" : "Image (Color 518 × 392)",
+        "hasSizeFlexibility" : "0",
+        "type" : "Image",
+        "shortDescription" : "Input image whose depth will be estimated. The shorter dimension should be 518 pixels and the larger dimension should be a multiple of 14.",
+        "name" : "image"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.apple.developer.machine-learning.models.version" : "2.0",
+      "com.apple.developer.machine-learning.models.release-date" : "2024-06",
+      "com.apple.developer.machine-learning.models.category" : "image",
+      "com.apple.coreml.model.preview.type" : "depthEstimation",
+      "com.apple.developer.machine-learning.models.name" : "DepthAnythingV2SmallF16.mlpackage"
+    },
+    "generatedClassName" : "DepthAnythingV2SmallF16",
+    "method" : "predict"
+  }
+]
