@@ -37,6 +37,7 @@
 		B0000000000000000000000B /* DepthAnythingV2SmallF16.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = DepthAnythingV2SmallF16.mlpackage; sourceTree = "<group>"; };
 		B0000000000000000000000C /* DepthAnythingV2SmallF16.mlmodelc */ = {isa = PBXFileReference; explicitFileType = folder; path = DepthAnythingV2SmallF16.mlmodelc; sourceTree = "<group>"; };
 		B0000000000000000000000D /* DepthProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthProcessor.swift; sourceTree = "<group>"; };
+		B0000000000000000000000E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		FF90316C3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift; sourceTree = "<group>"; };
 		FF90316D3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift; sourceTree = "<group>"; };
 		FF90317030510AD700509053 /* ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift; sourceTree = "<group>"; };
@@ -56,6 +57,7 @@
 		D00000000000000000000000 = {
 			isa = PBXGroup;
 			children = (
+				B0000000000000000000000E /* README.md */,
 				D00000000000000000000001 /* DepthVision3D */,
 				D00000000000000000000002 /* Products */,
 			);
