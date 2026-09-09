@@ -11,8 +11,11 @@ struct ContentView: View {
     }
 
     @StateObject private var model = AppViewModel()
+    @StateObject private var cinemaSession = CinemaSession()
+    @StateObject private var displayManager = ExternalDisplayManager()
     @State private var mode: Mode = .image
     @State private var photoItem: PhotosPickerItem?
+    @State private var videoItem: PhotosPickerItem?
     @State private var showVideoImporter = false
 
     var body: some View {
@@ -28,6 +31,7 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
 
                     settings
+                    externalDisplayCard
 
                     if mode == .image {
                         imageWorkspace
@@ -50,6 +54,9 @@ struct ContentView: View {
                 Text(model.errorMessage ?? "未知错误")
             }
             .onAppear {
+                cinemaSession.bind(displayManager: displayManager)
+                model.bindCinemaSession(cinemaSession)
+                displayManager.start()
                 if model.sourceImage == nil {
                     model.useDemoImage()
                 }
@@ -96,6 +103,39 @@ struct ContentView: View {
         .font(.subheadline)
         .padding()
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var externalDisplayCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: displayManager.info == nil
+                  ? "display.trianglebadge.exclamationmark"
+                  : "display.and.arrow.down")
+                .font(.title2)
+                .foregroundStyle(displayManager.info == nil ? Color.secondary : Color.cyan)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("View1 眼镜输出")
+                    .font(.subheadline.weight(.semibold))
+                Text(displayManager.connectionNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if displayManager.info?.model == .unknownExternal {
+                Button("确认为 View1") {
+                    displayManager.confirmAsView1()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding()
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 16)
+        )
     }
 
     private var imageWorkspace: some View {
@@ -181,14 +221,28 @@ struct ContentView: View {
 
     private var videoWorkspace: some View {
         VStack(spacing: 16) {
-            Button {
-                showVideoImporter = true
-            } label: {
-                Label("选择视频并转换", systemImage: "film.stack")
+            PhotosPicker(
+                selection: $videoItem,
+                matching: .videos,
+                preferredItemEncoding: .current
+            ) {
+                Label("从图册选择视频并转换", systemImage: "photo.on.rectangle")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(model.isWorking)
+            .onChange(of: videoItem) { _, item in
+                model.loadVideoItem(item)
+                videoItem = nil
+            }
+
+            Button {
+                showVideoImporter = true
+            } label: {
+                Label("从文件选择测试视频", systemImage: "folder")
+            }
+            .buttonStyle(.bordered)
             .disabled(model.isWorking)
             .fileImporter(
                 isPresented: $showVideoImporter,
@@ -206,8 +260,22 @@ struct ContentView: View {
                 }
             }
 
+            if model.isVideoWorking {
+                Button(role: .destructive) {
+                    model.cancelVideoConversion()
+                } label: {
+                    Label(
+                        model.isCancellingVideo ? "正在取消…" : "取消生成",
+                        systemImage: "xmark.circle"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.isCancellingVideo)
+            }
+
             if let url = model.exportedVideoURL {
-                VideoPlayer(player: AVPlayer(url: url))
+                VideoPlayer(player: cinemaSession.player)
                     .frame(height: 230)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
 
@@ -218,7 +286,7 @@ struct ContentView: View {
                 ContentUnavailableView(
                     "等待视频",
                     systemImage: "video",
-                    description: Text("演示版每 3 帧更新一次深度，并进行时序平滑。输出为无声 SBS MP4。")
+                    description: Text("演示版每 3 帧更新一次深度，并进行时序平滑。输出为有声 SBS MP4。")
                 )
                 .frame(height: 220)
             }

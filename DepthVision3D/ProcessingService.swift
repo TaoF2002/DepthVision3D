@@ -5,6 +5,20 @@ struct ImageConversionResult {
     let stereo: UIImage
 }
 
+enum ProcessingServiceError: LocalizedError {
+    case depthPrediction(Error)
+    case stereoRendering(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .depthPrediction(let error):
+            return "V2 深度推理失败：\(error.localizedDescription)"
+        case .stereoRendering(let error):
+            return "Metal 立体合成失败：\(error.localizedDescription)"
+        }
+    }
+}
+
 actor ProcessingService {
     static let shared = ProcessingService()
 
@@ -27,14 +41,24 @@ actor ProcessingService {
             throw StereoRendererError.cannotCreateImage
         }
 
-        let depth = try estimator.predict(cgImage: cgImage)
+        let depth: DepthFrame
+        do {
+            depth = try estimator.predict(cgImage: cgImage)
+        } catch {
+            throw ProcessingServiceError.depthPrediction(error)
+        }
         let strength = Float(cgImage.width) * strengthFraction
-        let stereoCG = try renderer.render(
-            image: cgImage,
-            depth: depth,
-            strength: strength,
-            convergence: convergence
-        )
+        let stereoCG: CGImage
+        do {
+            stereoCG = try renderer.render(
+                image: cgImage,
+                depth: depth,
+                strength: strength,
+                convergence: convergence
+            )
+        } catch {
+            throw ProcessingServiceError.stereoRendering(error)
+        }
         guard let depthCG = depth.grayscaleCGImage() else {
             throw StereoRendererError.cannotCreateImage
         }
@@ -50,9 +74,24 @@ extension UIImage {
     func normalized(maxDimension: CGFloat) -> UIImage {
         let sourceSize = size
         let scale = min(1, maxDimension / max(sourceSize.width, sourceSize.height))
-        let target = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let target = CGSize(
+            width: max(1, (sourceSize.width * scale).rounded()),
+            height: max(1, (sourceSize.height * scale).rounded())
+        )
 
-        return UIGraphicsImageRenderer(size: target).image { _ in
+        // Photos can deliver HEIF/HDR/Display-P3 images backed by deferred or
+        // extended-range storage. They display correctly in UIKit, but some of
+        // those CGImage layouts cannot be decoded by MTKTextureLoader. Render
+        // once into a predictable standard-range, 8-bit bitmap before passing
+        // the image to either Core ML or Metal.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+
+        return UIGraphicsImageRenderer(size: target, format: format).image { context in
+            context.cgContext.setFillColor(UIColor.black.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: target))
             draw(in: CGRect(origin: .zero, size: target))
         }
     }

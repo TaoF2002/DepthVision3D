@@ -17,6 +17,10 @@
 		A00000000000000000000009 /* ProcessingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* ProcessingService.swift */; };
 		A0000000000000000000000A /* VideoConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* VideoConverter.swift */; };
 		A0000000000000000000000C /* DepthAnythingV2SmallF16.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000C /* DepthAnythingV2SmallF16.mlmodelc */; };
+		A0000000000000000000000D /* DepthProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000D /* DepthProcessor.swift */; };
+		FF90316E3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF90316C3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift */; };
+		FF90316F3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF90316D3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift */; };
+		FF90317130510AD700509053 /* ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF90317030510AD700509053 /* ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +36,10 @@
 		B0000000000000000000000A /* VideoConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoConverter.swift; sourceTree = "<group>"; };
 		B0000000000000000000000B /* DepthAnythingV2SmallF16.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = DepthAnythingV2SmallF16.mlpackage; sourceTree = "<group>"; };
 		B0000000000000000000000C /* DepthAnythingV2SmallF16.mlmodelc */ = {isa = PBXFileReference; explicitFileType = folder; path = DepthAnythingV2SmallF16.mlmodelc; sourceTree = "<group>"; };
+		B0000000000000000000000D /* DepthProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthProcessor.swift; sourceTree = "<group>"; };
+		FF90316C3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift; sourceTree = "<group>"; };
+		FF90316D3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift; sourceTree = "<group>"; };
+		FF90317030510AD700509053 /* ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +73,10 @@
 				B00000000000000000000008 /* DemoImageFactory.swift */,
 				B00000000000000000000009 /* ProcessingService.swift */,
 				B0000000000000000000000A /* VideoConverter.swift */,
+				B0000000000000000000000D /* DepthProcessor.swift */,
+				FF90316C3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift */,
+				FF90316D3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift */,
+				FF90317030510AD700509053 /* ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift */,
 				D00000000000000000000003 /* Resources */,
 			);
 			path = DepthVision3D;
@@ -173,8 +185,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FF90316E3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift in Sources */,
+				FF90316F3050FCD600509053 /* ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift in Sources */,
 				A00000000000000000000001 /* DepthVision3DApp.swift in Sources */,
 				A00000000000000000000002 /* ContentView.swift in Sources */,
+				FF90317130510AD700509053 /* ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift in Sources */,
 				A00000000000000000000003 /* AppViewModel.swift in Sources */,
 				A00000000000000000000004 /* DepthFrame.swift in Sources */,
 				A00000000000000000000005 /* DepthEstimator.swift in Sources */,
@@ -182,6 +197,7 @@
 				A00000000000000000000008 /* DemoImageFactory.swift in Sources */,
 				A00000000000000000000009 /* ProcessingService.swift in Sources */,
 				A0000000000000000000000A /* VideoConverter.swift in Sources */,
+				A0000000000000000000000D /* DepthProcessor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
