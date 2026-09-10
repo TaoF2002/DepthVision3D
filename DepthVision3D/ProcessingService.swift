@@ -5,6 +5,98 @@ struct ImageConversionResult {
     let stereo: UIImage
 }
 
+/// View1 3D mode is treated as a 3840×1080 Full-SBS canvas. Each eye owns a
+/// 1920×1080 region and source content is aspect-fitted inside that region.
+/// Baking the bars into the result prevents players or display boxes from
+/// stretching portrait, square, or ultra-wide media.
+enum View1SBSLayout {
+    static let eyeSize = CGSize(width: 1920, height: 1080)
+    static let outputSize = CGSize(width: 3840, height: 1080)
+
+    static func fittedRect(for sourceSize: CGSize, in bounds: CGRect) -> CGRect {
+        guard sourceSize.width > 0, sourceSize.height > 0 else { return bounds }
+        let scale = min(bounds.width / sourceSize.width, bounds.height / sourceSize.height)
+        let size = CGSize(
+            width: sourceSize.width * scale,
+            height: sourceSize.height * scale
+        )
+        return CGRect(
+            x: bounds.minX + (bounds.width - size.width) * 0.5,
+            y: bounds.minY + (bounds.height - size.height) * 0.5,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    static func evenFittedContentSize(for sourceSize: CGSize) -> CGSize {
+        let rect = fittedRect(
+            for: sourceSize,
+            in: CGRect(origin: .zero, size: eyeSize)
+        )
+        return CGSize(
+            width: CGFloat(max(2, Int(rect.width.rounded()) & ~1)),
+            height: CGFloat(max(2, Int(rect.height.rounded()) & ~1))
+        )
+    }
+
+    static func format(stereoCGImage: CGImage) throws -> UIImage {
+        let sourceEyeWidth = stereoCGImage.width / 2
+        let sourceEyeHeight = stereoCGImage.height
+        guard sourceEyeWidth > 0,
+              let leftCG = stereoCGImage.cropping(to: CGRect(
+                  x: 0,
+                  y: 0,
+                  width: sourceEyeWidth,
+                  height: sourceEyeHeight
+              )),
+              let rightCG = stereoCGImage.cropping(to: CGRect(
+                  x: sourceEyeWidth,
+                  y: 0,
+                  width: sourceEyeWidth,
+                  height: sourceEyeHeight
+              )) else {
+            throw StereoRendererError.cannotCreateImage
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+        let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
+        return renderer.image { context in
+            context.cgContext.setFillColor(UIColor.black.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: outputSize))
+
+            let eyeBounds = CGRect(origin: .zero, size: eyeSize)
+            let contentRect = fittedRect(
+                for: CGSize(width: sourceEyeWidth, height: sourceEyeHeight),
+                in: eyeBounds
+            )
+            UIImage(cgImage: leftCG).draw(in: contentRect)
+            UIImage(cgImage: rightCG).draw(
+                in: contentRect.offsetBy(dx: eyeSize.width, dy: 0)
+            )
+        }
+    }
+
+    static func makeFlatSBS(from image: UIImage) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+        let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
+        return renderer.image { context in
+            context.cgContext.setFillColor(UIColor.black.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: outputSize))
+
+            let eyeBounds = CGRect(origin: .zero, size: eyeSize)
+            let contentRect = fittedRect(for: image.size, in: eyeBounds)
+            image.draw(in: contentRect)
+            image.draw(in: contentRect.offsetBy(dx: eyeSize.width, dy: 0))
+        }
+    }
+}
+
 enum ProcessingServiceError: LocalizedError {
     case depthPrediction(Error)
     case stereoRendering(Error)
@@ -37,7 +129,7 @@ actor ProcessingService {
     ) throws -> ImageConversionResult {
         try prepare()
         guard let estimator, let renderer,
-              let cgImage = image.normalized(maxDimension: 1280).cgImage else {
+              let cgImage = image.normalized(maxDimension: 1920).cgImage else {
             throw StereoRendererError.cannotCreateImage
         }
 
@@ -63,9 +155,10 @@ actor ProcessingService {
             throw StereoRendererError.cannotCreateImage
         }
 
+        let view1Stereo = try View1SBSLayout.format(stereoCGImage: stereoCG)
         return ImageConversionResult(
             depth: UIImage(cgImage: depthCG),
-            stereo: UIImage(cgImage: stereoCG)
+            stereo: view1Stereo
         )
     }
 }

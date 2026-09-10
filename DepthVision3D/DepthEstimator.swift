@@ -62,20 +62,52 @@ final class DepthEstimator {
             throw DepthEstimatorError.cannotCreateInputBuffer
         }
 
-        let sourceExtent = ciImage.extent
-        let scaleX = CGFloat(Self.inputWidth) / sourceExtent.width
-        let scaleY = CGFloat(Self.inputHeight) / sourceExtent.height
+        let sourceExtent = ciImage.extent.standardized
+        guard sourceExtent.width.isFinite,
+              sourceExtent.height.isFinite,
+              sourceExtent.width > 0,
+              sourceExtent.height > 0 else {
+            throw DepthEstimatorError.invalidDepthBuffer
+        }
+
+        let inputBounds = CGRect(
+            x: 0,
+            y: 0,
+            width: Self.inputWidth,
+            height: Self.inputHeight
+        )
+        let scale = min(
+            inputBounds.width / sourceExtent.width,
+            inputBounds.height / sourceExtent.height
+        )
+        let scaledSize = CGSize(
+            width: sourceExtent.width * scale,
+            height: sourceExtent.height * scale
+        )
+        let contentRect = CGRect(
+            x: (inputBounds.width - scaledSize.width) * 0.5,
+            y: (inputBounds.height - scaledSize.height) * 0.5,
+            width: scaledSize.width,
+            height: scaledSize.height
+        )
+
         let resized = ciImage
             .transformed(by: CGAffineTransform(
                 translationX: -sourceExtent.origin.x,
                 y: -sourceExtent.origin.y
             ))
-            .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(by: CGAffineTransform(
+                translationX: contentRect.minX,
+                y: contentRect.minY
+            ))
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1))
+            .cropped(to: inputBounds)
 
         context.render(
-            resized,
+            resized.composited(over: black),
             to: input,
-            bounds: CGRect(x: 0, y: 0, width: Self.inputWidth, height: Self.inputHeight),
+            bounds: inputBounds,
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
 
@@ -86,16 +118,43 @@ final class DepthEstimator {
         guard let depth = output.featureValue(for: "depth")?.imageBufferValue else {
             throw DepthEstimatorError.invalidDepthBuffer
         }
-        return try Self.readAndNormalize(depth)
+        return try Self.readAndNormalize(
+            depth,
+            cropRect: Self.integralCropRect(contentRect, within: inputBounds)
+        )
     }
 
-    private static func readAndNormalize(_ pixelBuffer: CVPixelBuffer) throws -> DepthFrame {
+    private static func integralCropRect(
+        _ rect: CGRect,
+        within bounds: CGRect
+    ) -> CGRect {
+        let minX = max(Int(bounds.minX), Int(floor(rect.minX)))
+        let minY = max(Int(bounds.minY), Int(floor(rect.minY)))
+        let maxX = min(Int(bounds.maxX), Int(ceil(rect.maxX)))
+        let maxY = min(Int(bounds.maxY), Int(ceil(rect.maxY)))
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: max(1, maxX - minX),
+            height: max(1, maxY - minY)
+        )
+    }
+
+    private static func readAndNormalize(
+        _ pixelBuffer: CVPixelBuffer,
+        cropRect: CGRect
+    ) throws -> DepthFrame {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bufferWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let bufferHeight = CVPixelBufferGetHeight(pixelBuffer)
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+
+        let cropX = min(max(0, Int(cropRect.minX)), bufferWidth - 1)
+        let cropY = min(max(0, Int(cropRect.minY)), bufferHeight - 1)
+        let width = min(max(1, Int(cropRect.width)), bufferWidth - cropX)
+        let height = min(max(1, Int(cropRect.height)), bufferHeight - cropY)
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
             throw DepthEstimatorError.invalidDepthBuffer
@@ -104,10 +163,10 @@ final class DepthEstimator {
         var values = [Float](repeating: 0, count: width * height)
         for y in 0..<height {
             let row = baseAddress
-                .advanced(by: y * bytesPerRow)
+                .advanced(by: (cropY + y) * bytesPerRow)
                 .assumingMemoryBound(to: UInt16.self)
             for x in 0..<width {
-                values[y * width + x] = Float(Float16(bitPattern: row[x]))
+                values[y * width + x] = Float(Float16(bitPattern: row[cropX + x]))
             }
         }
 

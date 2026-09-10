@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreImage
 import CoreVideo
 import Foundation
 
@@ -40,6 +41,8 @@ final class VideoConverter {
 
     private let estimator: DepthEstimator
     private let renderer: StereoRenderer
+    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
     init() throws {
         estimator = try DepthEstimator()
@@ -57,6 +60,7 @@ final class VideoConverter {
             throw VideoConverterError.noVideoTrack
         }
         let sourceSize = try await videoTrack.load(.naturalSize)
+        let sourceTransform = try await videoTrack.load(.preferredTransform)
         let assetDuration = try await asset.load(.duration)
         let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
         try Task.checkCancellation()
@@ -66,6 +70,7 @@ final class VideoConverter {
                 asset: asset,
                 videoTrack: videoTrack,
                 sourceSize: sourceSize,
+                sourceTransform: sourceTransform,
                 assetDuration: assetDuration,
                 strengthFraction: strengthFraction,
                 convergence: convergence,
@@ -113,25 +118,32 @@ final class VideoConverter {
         asset: AVAsset,
         videoTrack: AVAssetTrack,
         sourceSize: CGSize,
+        sourceTransform: CGAffineTransform,
         assetDuration: CMTime,
         strengthFraction: Float,
         convergence: Float,
         progress: @escaping (Double) -> Void
     ) throws -> SilentVideoResult {
-        let sourceWidth = max(2, Int(abs(sourceSize.width)))
-        let sourceHeight = max(2, Int(abs(sourceSize.height)))
-        let maxWidth = 960.0
-        let scale = min(1.0, maxWidth / Double(sourceWidth))
-        let width = max(2, Int(Double(sourceWidth) * scale) & ~1)
-        let height = max(2, Int(Double(sourceHeight) * scale) & ~1)
+        let transformedRect = CGRect(origin: .zero, size: sourceSize)
+            .applying(sourceTransform)
+            .standardized
+        let orientedSize = CGSize(
+            width: abs(transformedRect.width),
+            height: abs(transformedRect.height)
+        )
+        let contentSize = View1SBSLayout.evenFittedContentSize(for: orientedSize)
+        let contentWidth = Int(contentSize.width)
+        let contentHeight = Int(contentSize.height)
+        let eyeWidth = Int(View1SBSLayout.eyeSize.width)
+        let eyeHeight = Int(View1SBSLayout.eyeSize.height)
+        let outputWidth = eyeWidth * 2
+        let outputHeight = eyeHeight
 
         let reader = try AVAssetReader(asset: asset)
         let readerOutput = AVAssetReaderTrackOutput(
             track: videoTrack,
             outputSettings: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
                 kCVPixelBufferMetalCompatibilityKey as String: true
             ]
         )
@@ -140,6 +152,17 @@ final class VideoConverter {
             throw VideoConverterError.cannotStartReader
         }
         reader.add(readerOutput)
+
+        guard let orientedFramePool = Self.makePixelBufferPool(
+                  width: contentWidth,
+                  height: contentHeight
+              ),
+              let stereoContentPool = Self.makePixelBufferPool(
+                  width: contentWidth * 2,
+                  height: contentHeight
+              ) else {
+            throw VideoConverterError.cannotCreateOutputBuffer
+        }
 
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("DepthVision3D-\(UUID().uuidString).mp4")
@@ -156,10 +179,10 @@ final class VideoConverter {
             mediaType: .video,
             outputSettings: [
                 AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: width * 2,
-                AVVideoHeightKey: height,
+                AVVideoWidthKey: outputWidth,
+                AVVideoHeightKey: outputHeight,
                 AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: max(2_000_000, width * height * 8),
+                    AVVideoAverageBitRateKey: max(2_000_000, eyeWidth * eyeHeight * 8),
                     AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
                 ]
             ]
@@ -170,8 +193,8 @@ final class VideoConverter {
             assetWriterInput: writerInput,
             sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: width * 2,
-                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferWidthKey as String: outputWidth,
+                kCVPixelBufferHeightKey as String: outputHeight,
                 kCVPixelBufferMetalCompatibilityKey as String: true,
                 kCVPixelBufferIOSurfacePropertiesKey as String: [:]
             ]
@@ -203,9 +226,18 @@ final class VideoConverter {
                 if firstPresentationTime == nil { firstPresentationTime = sourceTime }
                 let relativeTime = CMTimeSubtract(sourceTime, firstPresentationTime ?? .zero)
 
+                guard let orientedBuffer = Self.makePixelBuffer(from: orientedFramePool) else {
+                    throw VideoConverterError.cannotCreateOutputBuffer
+                }
+                try renderOrientedFrame(
+                    sourceBuffer,
+                    transform: sourceTransform,
+                    into: orientedBuffer
+                )
+
                 if frameIndex % 3 == 0 || cachedDepth == nil {
                     try Task.checkCancellation()
-                    let current = try estimator.predict(pixelBuffer: sourceBuffer)
+                    let current = try estimator.predict(pixelBuffer: orientedBuffer)
                     let filtered = current.blended(with: previousDepth, currentWeight: 0.28)
                     previousDepth = filtered
                     cachedDepth = filtered
@@ -215,18 +247,22 @@ final class VideoConverter {
                     throw VideoConverterError.cannotCreateOutputBuffer
                 }
 
-                var outputBuffer: CVPixelBuffer?
-                guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer) == kCVReturnSuccess,
-                      let outputBuffer else {
+                guard let stereoContentBuffer = Self.makePixelBuffer(from: stereoContentPool),
+                      let outputBuffer = Self.makePixelBuffer(from: pool) else {
                     throw VideoConverterError.cannotCreateOutputBuffer
                 }
 
                 try renderer.render(
-                    pixelBuffer: sourceBuffer,
+                    pixelBuffer: orientedBuffer,
                     depth: depth,
-                    into: outputBuffer,
-                    strength: Float(width) * strengthFraction,
+                    into: stereoContentBuffer,
+                    strength: Float(contentWidth) * strengthFraction,
                     convergence: convergence
+                )
+                renderStereoContent(
+                    stereoContentBuffer,
+                    contentSize: contentSize,
+                    into: outputBuffer
                 )
 
                 while !writerInput.isReadyForMoreMediaData {
@@ -262,6 +298,116 @@ final class VideoConverter {
             url: outputURL,
             sourceTimelineOrigin: firstPresentationTime ?? .zero
         )
+    }
+
+    private func renderOrientedFrame(
+        _ sourceBuffer: CVPixelBuffer,
+        transform: CGAffineTransform,
+        into destinationBuffer: CVPixelBuffer
+    ) throws {
+        var image = CIImage(cvPixelBuffer: sourceBuffer).transformed(by: transform)
+        var extent = image.extent.standardized
+        guard extent.width.isFinite, extent.height.isFinite,
+              extent.width > 0, extent.height > 0 else {
+            throw VideoConverterError.cannotCreateOutputBuffer
+        }
+
+        image = image.transformed(by: CGAffineTransform(
+            translationX: -extent.minX,
+            y: -extent.minY
+        ))
+        extent = image.extent.standardized
+
+        let targetSize = CGSize(
+            width: CVPixelBufferGetWidth(destinationBuffer),
+            height: CVPixelBufferGetHeight(destinationBuffer)
+        )
+        let scale = min(targetSize.width / extent.width, targetSize.height / extent.height)
+        image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        extent = image.extent.standardized
+        image = image.transformed(by: CGAffineTransform(
+            translationX: (targetSize.width - extent.width) * 0.5 - extent.minX,
+            y: (targetSize.height - extent.height) * 0.5 - extent.minY
+        ))
+
+        let bounds = CGRect(origin: .zero, size: targetSize)
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1))
+            .cropped(to: bounds)
+        ciContext.render(
+            image.composited(over: black),
+            to: destinationBuffer,
+            bounds: bounds,
+            colorSpace: colorSpace
+        )
+    }
+
+    private func renderStereoContent(
+        _ stereoBuffer: CVPixelBuffer,
+        contentSize: CGSize,
+        into outputBuffer: CVPixelBuffer
+    ) {
+        let contentWidth = contentSize.width
+        let contentHeight = contentSize.height
+        let eyeWidth = View1SBSLayout.eyeSize.width
+        let eyeHeight = View1SBSLayout.eyeSize.height
+        let offsetX = (eyeWidth - contentWidth) * 0.5
+        let offsetY = (eyeHeight - contentHeight) * 0.5
+
+        let stereo = CIImage(cvPixelBuffer: stereoBuffer)
+        let left = stereo
+            .cropped(to: CGRect(x: 0, y: 0, width: contentWidth, height: contentHeight))
+            .transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        let right = stereo
+            .cropped(to: CGRect(
+                x: contentWidth,
+                y: 0,
+                width: contentWidth,
+                height: contentHeight
+            ))
+            .transformed(by: CGAffineTransform(
+                translationX: eyeWidth + offsetX - contentWidth,
+                y: offsetY
+            ))
+
+        let outputBounds = CGRect(origin: .zero, size: View1SBSLayout.outputSize)
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1))
+            .cropped(to: outputBounds)
+        let composed = left.composited(over: right.composited(over: black))
+        ciContext.render(
+            composed,
+            to: outputBuffer,
+            bounds: outputBounds,
+            colorSpace: colorSpace
+        )
+    }
+
+    private static func makePixelBufferPool(
+        width: Int,
+        height: Int
+    ) -> CVPixelBufferPool? {
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ]
+        var pool: CVPixelBufferPool?
+        let status = CVPixelBufferPoolCreate(
+            nil,
+            nil,
+            attributes as CFDictionary,
+            &pool
+        )
+        return status == kCVReturnSuccess ? pool : nil
+    }
+
+    private static func makePixelBuffer(
+        from pool: CVPixelBufferPool
+    ) -> CVPixelBuffer? {
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+        return status == kCVReturnSuccess ? buffer : nil
     }
 
     /// Adds the original audio only after the expensive V2/Metal pass has

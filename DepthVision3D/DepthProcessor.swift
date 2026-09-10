@@ -57,19 +57,6 @@ final class DepthProcessor {
     }
 
     private static func makeFlatSBS(from image: UIImage) -> UIImage {
-        let normalized = image.normalized(maxDimension: 1280)
-        let eyeSize = normalized.size
-        let outputSize = CGSize(width: eyeSize.width * 2, height: eyeSize.height)
-        return UIGraphicsImageRenderer(size: outputSize).image { _ in
-            normalized.draw(in: CGRect(origin: .zero, size: eyeSize))
-            normalized.draw(
-                in: CGRect(
-                    x: eyeSize.width,
-                    y: 0,
-                    width: eyeSize.width,
-                    height: eyeSize.height
-                )
-            )
-        }
+        View1SBSLayout.makeFlatSBS(from: image.normalized(maxDimension: 1920))
     }
 }
