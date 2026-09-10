@@ -108,7 +108,7 @@ Metal SBS 合成 + H.264 写入
 
 - Depth Anything V2 输出的是归一化后的相对深度，不是以米为单位的真实深度。
 - 输出属于基于深度视差生成的 2.5D SBS 内容，不是包含物体背面几何信息的完整 3D 模型。
-- `DepthRelief` 当前复用 V2 和 Metal 管线，并使用更强的视差参数；它不是已经确认的公司专有 Depth Relief 算法。
+- `DepthRelief` 当前复用 V2 和 Metal 管线，并使用更强的视差参数；它不是已经确认的专有 Depth Relief 算法。
 - 图片最长边会限制为 1280 像素；视频单眼宽度最高为 960 像素，最终输出宽度为单眼画面的两倍。
 - 视频每 3 帧更新一次深度，性能更好，但快速运动场景可能出现深度变化滞后或闪烁。
 - 常见 AAC 音轨可以直接封装进 MP4；部分 MOV/PCM 或特殊音频格式可能需要额外转码。
@@ -124,4 +124,4 @@ Metal SBS 合成 + H.264 写入
 - [`CinemaSession.swift`](DepthVision3D/ios_View1Cinema_View1Cinema_Playback_CinemaSession.swift)：手机与 View1 共用的播放及展示状态。
 - [`ExternalDisplayManager.swift`](DepthVision3D/ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalDisplayManager.swift)：外接屏幕检测、确认、连接和重连。
 - [`ExternalRootView.swift`](DepthVision3D/ios_View1Cinema_View1Cinema_ExternalDisplay_ExternalRootView.swift)：View1 外屏显示界面。
-- [`DepthProcessor.swift`](DepthVision3D/DepthProcessor.swift)：公司 View1 接口与现有 V2 管线之间的兼容层。
+- [`DepthProcessor.swift`](DepthVision3D/DepthProcessor.swift)：View1 接口与现有 V2 管线之间的兼容层。
