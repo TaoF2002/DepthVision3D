@@ -1,5 +1,7 @@
 # DepthVision3D
 
+**简体中文** | [English](README_EN.md)
+
 DepthVision3D 是一个运行在 iPhone 端的 2D → 3D 实验项目。它使用 **Depth Anything V2 Small（Core ML）** 估计相对深度，再通过 **Metal** 生成左右眼并排（Side-by-Side，SBS）内容，并可在手机端预览或输出到 View1 眼镜外屏。
 
 > 深度推理和 SBS 合成都在 iPhone 上完成，眼镜端当前负责显示结果，并不在眼镜上运行模型。
