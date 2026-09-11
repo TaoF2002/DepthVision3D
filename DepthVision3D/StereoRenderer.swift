@@ -26,6 +26,8 @@ final class StereoRenderer {
         var outputHeight: UInt32
         var strengthPixels: Float
         var convergence: Float
+        var maxParallaxFraction: Float
+        var depthCurve: Float
     }
 
     private let device: MTLDevice
@@ -60,6 +62,8 @@ final class StereoRenderer {
         uint outputHeight;
         float strengthPixels;
         float convergence;
+        float maxParallaxFraction;
+        float depthCurve;
     };
 
     kernel void stereoSideBySide(
@@ -76,7 +80,20 @@ final class StereoRenderer {
         uint localX = rightEye ? gid.x - eyeWidth : gid.x;
         float2 uv = (float2(localX, gid.y) + 0.5) / float2(eyeWidth, uniforms.outputHeight);
         float relativeDepth = depthTexture.sample(s, uv).r;
-        float disparity = (relativeDepth - uniforms.convergence) * uniforms.strengthPixels;
+        float depthDelta = relativeDepth - uniforms.convergence;
+        float sideRange = depthDelta < 0.0
+            ? max(uniforms.convergence, 0.0001)
+            : max(1.0 - uniforms.convergence, 0.0001);
+        float normalizedDistance = clamp(abs(depthDelta) / sideRange, 0.0, 1.0);
+        float curvedDistance = pow(
+            normalizedDistance,
+            max(uniforms.depthCurve, 0.01)
+        ) * sideRange;
+        float curvedDelta = depthDelta < 0.0 ? -curvedDistance : curvedDistance;
+        float disparity = curvedDelta * uniforms.strengthPixels;
+        float maxDisparityPixels = float(eyeWidth)
+            * max(uniforms.maxParallaxFraction, 0.0) * 0.5;
+        disparity = clamp(disparity, -maxDisparityPixels, maxDisparityPixels);
         float direction = rightEye ? -1.0 : 1.0;
         float2 sourceUV = uv + float2(direction * disparity / float(eyeWidth), 0.0);
         outputTexture.write(colorTexture.sample(s, sourceUV), gid);
@@ -87,7 +104,9 @@ final class StereoRenderer {
         image: CGImage,
         depth: DepthFrame,
         strength: Float,
-        convergence: Float
+        convergence: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float
     ) throws -> CGImage {
         let input = try textureLoader.newTexture(
             cgImage: image,
@@ -107,7 +126,9 @@ final class StereoRenderer {
             depth: depthTexture,
             output: output,
             strength: strength,
-            convergence: convergence
+            convergence: convergence,
+            maxParallaxFraction: maxParallaxFraction,
+            depthCurve: depthCurve
         )
 
         let bytesPerRow = output.width * 4
@@ -143,7 +164,9 @@ final class StereoRenderer {
         depth: DepthFrame,
         into outputPixelBuffer: CVPixelBuffer,
         strength: Float,
-        convergence: Float
+        convergence: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float
     ) throws {
         guard let textureCache,
               let input = makeTexture(
@@ -165,7 +188,9 @@ final class StereoRenderer {
             depth: depthTexture,
             output: output,
             strength: strength,
-            convergence: convergence
+            convergence: convergence,
+            maxParallaxFraction: maxParallaxFraction,
+            depthCurve: depthCurve
         )
     }
 
@@ -231,7 +256,9 @@ final class StereoRenderer {
         depth: MTLTexture,
         output: MTLTexture,
         strength: Float,
-        convergence: Float
+        convergence: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float
     ) throws {
         guard let commandBuffer = queue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -242,7 +269,9 @@ final class StereoRenderer {
             outputWidth: UInt32(output.width),
             outputHeight: UInt32(output.height),
             strengthPixels: strength,
-            convergence: convergence
+            convergence: convergence,
+            maxParallaxFraction: maxParallaxFraction,
+            depthCurve: depthCurve
         )
 
         encoder.setComputePipelineState(pipeline)

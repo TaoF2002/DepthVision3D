@@ -24,18 +24,58 @@ private struct ImportedVideo: Transferable {
     }
 }
 
+enum StereoPreset: String, CaseIterable, Identifiable, Hashable {
+    case soft = "柔和3D"
+    case standard = "标准3D"
+    case immersive = "沉浸3D"
+
+    var id: Self { self }
+
+    var strength: Double {
+        switch self {
+        case .soft: 0.015
+        case .standard: 0.025
+        case .immersive: 0.040
+        }
+    }
+
+    var convergence: Double { 0.50 }
+
+    /// Maximum total left-to-right-eye parallax as a fraction of one eye's width.
+    var maxParallax: Double {
+        switch self {
+        case .soft: 0.015
+        case .standard: 0.025
+        case .immersive: 0.035
+        }
+    }
+
+    /// Values above 1 soften mid-depth differences; values below 1 emphasize them.
+    var depthCurve: Double {
+        switch self {
+        case .soft: 1.20
+        case .standard: 1.00
+        case .immersive: 0.80
+        }
+    }
+}
+
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var sourceImage: UIImage?
     @Published var depthImage: UIImage?
     @Published var stereoImage: UIImage?
-    @Published var strength: Double = 0.025
-    @Published var convergence: Double = 0.50
+    @Published private(set) var selectedStereoPreset: StereoPreset? = .standard
+    @Published private(set) var strength: Double = StereoPreset.standard.strength
+    @Published private(set) var convergence: Double = StereoPreset.standard.convergence
+    @Published private(set) var maxParallax: Double = StereoPreset.standard.maxParallax
+    @Published private(set) var depthCurve: Double = StereoPreset.standard.depthCurve
     @Published var isWorking = false
     @Published var status = "选择一张图片，或使用内置示例开始。"
     @Published var videoProgress: Double = 0
     @Published var exportedVideoURL: URL?
     @Published var errorMessage: String?
+    @Published var performanceReport: String?
     @Published private(set) var isVideoWorking = false
     @Published private(set) var isCancellingVideo = false
     private var didStartWarmUp = false
@@ -44,6 +84,34 @@ final class AppViewModel: ObservableObject {
 
     func bindCinemaSession(_ session: CinemaSession) {
         cinemaSession = session
+    }
+
+    func applyStereoPreset(_ preset: StereoPreset) {
+        strength = preset.strength
+        convergence = preset.convergence
+        maxParallax = preset.maxParallax
+        depthCurve = preset.depthCurve
+        selectedStereoPreset = preset
+    }
+
+    func updateStrength(_ value: Double) {
+        strength = value
+        selectedStereoPreset = nil
+    }
+
+    func updateConvergence(_ value: Double) {
+        convergence = value
+        selectedStereoPreset = nil
+    }
+
+    func updateMaxParallax(_ value: Double) {
+        maxParallax = value
+        selectedStereoPreset = nil
+    }
+
+    func updateDepthCurve(_ value: Double) {
+        depthCurve = value
+        selectedStereoPreset = nil
     }
 
     func warmUpEngine() {
@@ -66,6 +134,7 @@ final class AppViewModel: ObservableObject {
         sourceImage = DemoImageFactory.make()
         depthImage = nil
         stereoImage = nil
+        performanceReport = nil
         status = "已载入内置示例。"
     }
 
@@ -84,6 +153,7 @@ final class AppViewModel: ObservableObject {
                 sourceImage = image
                 depthImage = nil
                 stereoImage = nil
+                performanceReport = nil
                 status = "图片已载入，点击“生成立体图”。"
             } catch {
                 present(error)
@@ -96,6 +166,7 @@ final class AppViewModel: ObservableObject {
         depthImage = nil
         stereoImage = nil
         errorMessage = nil
+        performanceReport = nil
         isWorking = true
         status = "正在加载 Depth Anything V2 并估计深度…"
 
@@ -107,11 +178,14 @@ final class AppViewModel: ObservableObject {
                 let result = try await ProcessingService.shared.convertImage(
                     sourceImage,
                     strengthFraction: Float(strength),
-                    convergence: Float(convergence)
+                    convergence: Float(convergence),
+                    maxParallaxFraction: Float(maxParallax),
+                    depthCurve: Float(depthCurve)
                 )
                 depthImage = result.depth
                 stereoImage = result.stereo
                 cinemaSession?.presentSBS(result.stereo)
+                performanceReport = result.metrics.report
                 status = "完成：输出为左右眼并排（SBS）立体图。"
             } catch {
                 present(error)
@@ -182,6 +256,7 @@ final class AppViewModel: ObservableObject {
         videoProgress = 0
         exportedVideoURL = nil
         errorMessage = nil
+        performanceReport = nil
         self.status = status
     }
 
@@ -190,7 +265,9 @@ final class AppViewModel: ObservableObject {
         let result = try await converter.convert(
             sourceURL: url,
             strengthFraction: Float(strength),
-            convergence: Float(convergence)
+            convergence: Float(convergence),
+            maxParallaxFraction: Float(maxParallax),
+            depthCurve: Float(depthCurve)
         ) { [weak self] progress in
             Task { @MainActor in
                 guard self?.isCancellingVideo == false else { return }
@@ -198,8 +275,9 @@ final class AppViewModel: ObservableObject {
                 self?.status = "正在转换视频 \(Int(progress * 100))%"
             }
         }
-        exportedVideoURL = result
-        cinemaSession?.replaceVideo(url: result)
+        exportedVideoURL = result.url
+        cinemaSession?.replaceVideo(url: result.url)
+        performanceReport = result.metrics.report
         videoProgress = 1
         status = "视频转换完成，可预览或分享 SBS 视频。"
     }

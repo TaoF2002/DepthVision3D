@@ -25,6 +25,81 @@ enum VideoConverterError: LocalizedError {
     }
 }
 
+struct VideoConversionResult {
+    let url: URL
+    let metrics: VideoProcessingMetrics
+}
+
+struct VideoProcessingMetrics {
+    let totalSeconds: TimeInterval
+    let engineInitializationSeconds: TimeInterval
+    let assetLoadingSeconds: TimeInterval
+    let pipelineSetupSeconds: TimeInterval
+    let frameLoopSeconds: TimeInterval
+    let frameReadSeconds: TimeInterval
+    let orientationAndScaleSeconds: TimeInterval
+    let depthInferenceSeconds: TimeInterval
+    let stereoRenderingSeconds: TimeInterval
+    let outputLayoutSeconds: TimeInterval
+    let encodingWaitAndAppendSeconds: TimeInterval
+    let encodingFinalizationSeconds: TimeInterval
+    let audioPackagingSeconds: TimeInterval
+    let silentPipelineSeconds: TimeInterval
+    let sourceDurationSeconds: TimeInterval
+    let frameCount: Int
+    let depthInferenceCount: Int
+    let contentWidth: Int
+    let contentHeight: Int
+    let audioAttached: Bool
+
+    var report: String {
+        let sourceFPS = sourceDurationSeconds > 0
+            ? Double(frameCount) / sourceDurationSeconds
+            : 0
+        let processingFPS = frameLoopSeconds > 0
+            ? Double(frameCount) / frameLoopSeconds
+            : 0
+        let inferenceAverage = depthInferenceCount > 0
+            ? depthInferenceSeconds * 1_000 / Double(depthInferenceCount)
+            : 0
+        let audioText = audioAttached
+            ? Self.seconds(audioPackagingSeconds)
+            : "未封装音轨（\(Self.seconds(audioPackagingSeconds))）"
+
+        return [
+            "视频性能统计",
+            "总耗时：\(Self.seconds(totalSeconds))",
+            "素材：\(Self.seconds(sourceDurationSeconds)) / \(frameCount)帧 / 约\(Self.decimal(sourceFPS))fps",
+            "逐帧处理速度：\(Self.decimal(processingFPS))帧/秒",
+            "内容区域：\(contentWidth)×\(contentHeight)，输出：3840×1080",
+            "引擎初始化：\(Self.seconds(engineInitializationSeconds))",
+            "素材信息读取：\(Self.seconds(assetLoadingSeconds))",
+            "读写管线准备：\(Self.seconds(pipelineSetupSeconds))",
+            "取帧/解码等待：\(Self.seconds(frameReadSeconds))",
+            "方向修正与缩放：\(Self.seconds(orientationAndScaleSeconds))",
+            "V2推理：\(Self.seconds(depthInferenceSeconds))（\(depthInferenceCount)次，平均\(Self.milliseconds(inferenceAverage))）",
+            "Metal SBS：\(Self.seconds(stereoRenderingSeconds))",
+            "3840×1080布局：\(Self.seconds(outputLayoutSeconds))",
+            "编码等待与写入：\(Self.seconds(encodingWaitAndAppendSeconds))",
+            "编码收尾：\(Self.seconds(encodingFinalizationSeconds))",
+            "无声视频阶段：\(Self.seconds(silentPipelineSeconds))",
+            "音频封装：\(audioText)"
+        ].joined(separator: "\n")
+    }
+
+    private static func seconds(_ value: TimeInterval) -> String {
+        String(format: "%.3f秒", value)
+    }
+
+    private static func milliseconds(_ value: TimeInterval) -> String {
+        String(format: "%.2f毫秒", value)
+    }
+
+    private static func decimal(_ value: Double) -> String {
+        String(format: "%.2f", value)
+    }
+}
+
 final class VideoConverter {
     private final class ExportSessionBox: @unchecked Sendable {
         let value: AVAssetExportSession
@@ -34,27 +109,52 @@ final class VideoConverter {
         }
     }
 
+    private struct SilentVideoTiming {
+        let pipelineSeconds: TimeInterval
+        let setupSeconds: TimeInterval
+        let frameLoopSeconds: TimeInterval
+        let frameReadSeconds: TimeInterval
+        let orientationAndScaleSeconds: TimeInterval
+        let depthInferenceSeconds: TimeInterval
+        let stereoRenderingSeconds: TimeInterval
+        let outputLayoutSeconds: TimeInterval
+        let encodingWaitAndAppendSeconds: TimeInterval
+        let encodingFinalizationSeconds: TimeInterval
+        let frameCount: Int
+        let depthInferenceCount: Int
+        let contentWidth: Int
+        let contentHeight: Int
+    }
+
     private struct SilentVideoResult {
         let url: URL
         let sourceTimelineOrigin: CMTime
+        let timing: SilentVideoTiming
     }
 
     private let estimator: DepthEstimator
     private let renderer: StereoRenderer
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private let engineInitializationSeconds: TimeInterval
 
     init() throws {
+        let start = ProcessInfo.processInfo.systemUptime
         estimator = try DepthEstimator()
         renderer = try StereoRenderer()
+        engineInitializationSeconds = ProcessInfo.processInfo.systemUptime - start
     }
 
     func convert(
         sourceURL: URL,
         strengthFraction: Float,
         convergence: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float,
         progress: @escaping (Double) -> Void
-    ) async throws -> URL {
+    ) async throws -> VideoConversionResult {
+        let conversionStart = ProcessInfo.processInfo.systemUptime
+        let assetLoadingStart = ProcessInfo.processInfo.systemUptime
         let asset = AVURLAsset(url: sourceURL)
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw VideoConverterError.noVideoTrack
@@ -63,6 +163,7 @@ final class VideoConverter {
         let sourceTransform = try await videoTrack.load(.preferredTransform)
         let assetDuration = try await asset.load(.duration)
         let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
+        let assetLoadingSeconds = ProcessInfo.processInfo.systemUptime - assetLoadingStart
         try Task.checkCancellation()
 
         let conversionTask = Task.detached(priority: .userInitiated) { [self] in
@@ -74,6 +175,8 @@ final class VideoConverter {
                 assetDuration: assetDuration,
                 strengthFraction: strengthFraction,
                 convergence: convergence,
+                maxParallaxFraction: maxParallaxFraction,
+                depthCurve: depthCurve,
                 progress: { value in
                     progress(min(value * 0.95, 0.95))
                 }
@@ -95,14 +198,24 @@ final class VideoConverter {
             try Task.checkCancellation()
             shouldRemoveSilentVideo = false
             progress(1)
-            return silentResult.url
+            return makeResult(
+                url: silentResult.url,
+                silentResult: silentResult,
+                assetLoadingSeconds: assetLoadingSeconds,
+                sourceDurationSeconds: assetDuration.seconds,
+                audioPackagingSeconds: 0,
+                audioAttached: false,
+                conversionStart: conversionStart
+            )
         }
 
+        let audioStart = ProcessInfo.processInfo.systemUptime
         let mixedURL = try await Self.attachAudio(
             audioTrack: audioTrack,
             sourceTimelineOrigin: silentResult.sourceTimelineOrigin,
             toVideoAt: silentResult.url
         )
+        let audioPackagingSeconds = ProcessInfo.processInfo.systemUptime - audioStart
         if Task.isCancelled {
             if mixedURL != silentResult.url {
                 try? FileManager.default.removeItem(at: mixedURL)
@@ -111,7 +224,53 @@ final class VideoConverter {
         }
         shouldRemoveSilentVideo = mixedURL != silentResult.url
         progress(1)
-        return mixedURL
+        return makeResult(
+            url: mixedURL,
+            silentResult: silentResult,
+            assetLoadingSeconds: assetLoadingSeconds,
+            sourceDurationSeconds: assetDuration.seconds,
+            audioPackagingSeconds: audioPackagingSeconds,
+            audioAttached: mixedURL != silentResult.url,
+            conversionStart: conversionStart
+        )
+    }
+
+    private func makeResult(
+        url: URL,
+        silentResult: SilentVideoResult,
+        assetLoadingSeconds: TimeInterval,
+        sourceDurationSeconds: TimeInterval,
+        audioPackagingSeconds: TimeInterval,
+        audioAttached: Bool,
+        conversionStart: TimeInterval
+    ) -> VideoConversionResult {
+        let timing = silentResult.timing
+        let metrics = VideoProcessingMetrics(
+            totalSeconds: engineInitializationSeconds
+                + ProcessInfo.processInfo.systemUptime
+                - conversionStart,
+            engineInitializationSeconds: engineInitializationSeconds,
+            assetLoadingSeconds: assetLoadingSeconds,
+            pipelineSetupSeconds: timing.setupSeconds,
+            frameLoopSeconds: timing.frameLoopSeconds,
+            frameReadSeconds: timing.frameReadSeconds,
+            orientationAndScaleSeconds: timing.orientationAndScaleSeconds,
+            depthInferenceSeconds: timing.depthInferenceSeconds,
+            stereoRenderingSeconds: timing.stereoRenderingSeconds,
+            outputLayoutSeconds: timing.outputLayoutSeconds,
+            encodingWaitAndAppendSeconds: timing.encodingWaitAndAppendSeconds,
+            encodingFinalizationSeconds: timing.encodingFinalizationSeconds,
+            audioPackagingSeconds: audioPackagingSeconds,
+            silentPipelineSeconds: timing.pipelineSeconds,
+            sourceDurationSeconds: max(sourceDurationSeconds, 0),
+            frameCount: timing.frameCount,
+            depthInferenceCount: timing.depthInferenceCount,
+            contentWidth: timing.contentWidth,
+            contentHeight: timing.contentHeight,
+            audioAttached: audioAttached
+        )
+        print("[DepthVision3D]\n\(metrics.report)")
+        return VideoConversionResult(url: url, metrics: metrics)
     }
 
     private func convertSynchronously(
@@ -122,8 +281,11 @@ final class VideoConverter {
         assetDuration: CMTime,
         strengthFraction: Float,
         convergence: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float,
         progress: @escaping (Double) -> Void
     ) throws -> SilentVideoResult {
+        let pipelineStart = ProcessInfo.processInfo.systemUptime
         let transformedRect = CGRect(origin: .zero, size: sourceSize)
             .applying(sourceTransform)
             .standardized
@@ -211,14 +373,30 @@ final class VideoConverter {
             throw writer.error ?? VideoConverterError.cannotStartWriter
         }
         writer.startSession(atSourceTime: .zero)
+        let pipelineSetupSeconds = ProcessInfo.processInfo.systemUptime - pipelineStart
 
-        let duration = max(assetDuration.seconds, 0.001)
+        let rawDuration = assetDuration.seconds
+        let duration = rawDuration.isFinite ? max(rawDuration, 0.001) : 0.001
         var frameIndex = 0
+        var depthInferenceCount = 0
         var previousDepth: DepthFrame?
         var cachedDepth: DepthFrame?
         var firstPresentationTime: CMTime?
+        var frameReadSeconds: TimeInterval = 0
+        var orientationAndScaleSeconds: TimeInterval = 0
+        var depthInferenceSeconds: TimeInterval = 0
+        var stereoRenderingSeconds: TimeInterval = 0
+        var outputLayoutSeconds: TimeInterval = 0
+        var encodingWaitAndAppendSeconds: TimeInterval = 0
 
-        while let sample = readerOutput.copyNextSampleBuffer() {
+        let frameLoopStart = ProcessInfo.processInfo.systemUptime
+        while true {
+            let frameReadStart = ProcessInfo.processInfo.systemUptime
+            guard let sample = readerOutput.copyNextSampleBuffer() else {
+                frameReadSeconds += ProcessInfo.processInfo.systemUptime - frameReadStart
+                break
+            }
+            frameReadSeconds += ProcessInfo.processInfo.systemUptime - frameReadStart
             try Task.checkCancellation()
             try autoreleasepool {
                 guard let sourceBuffer = CMSampleBufferGetImageBuffer(sample) else { return }
@@ -226,6 +404,7 @@ final class VideoConverter {
                 if firstPresentationTime == nil { firstPresentationTime = sourceTime }
                 let relativeTime = CMTimeSubtract(sourceTime, firstPresentationTime ?? .zero)
 
+                let orientationStart = ProcessInfo.processInfo.systemUptime
                 guard let orientedBuffer = Self.makePixelBuffer(from: orientedFramePool) else {
                     throw VideoConverterError.cannotCreateOutputBuffer
                 }
@@ -234,37 +413,51 @@ final class VideoConverter {
                     transform: sourceTransform,
                     into: orientedBuffer
                 )
+                orientationAndScaleSeconds += ProcessInfo.processInfo.systemUptime
+                    - orientationStart
 
                 if frameIndex % 3 == 0 || cachedDepth == nil {
                     try Task.checkCancellation()
+                    let depthStart = ProcessInfo.processInfo.systemUptime
                     let current = try estimator.predict(pixelBuffer: orientedBuffer)
                     let filtered = current.blended(with: previousDepth, currentWeight: 0.28)
                     previousDepth = filtered
                     cachedDepth = filtered
+                    depthInferenceSeconds += ProcessInfo.processInfo.systemUptime - depthStart
+                    depthInferenceCount += 1
                 }
                 guard let depth = cachedDepth,
                       let pool = adaptor.pixelBufferPool else {
                     throw VideoConverterError.cannotCreateOutputBuffer
                 }
 
-                guard let stereoContentBuffer = Self.makePixelBuffer(from: stereoContentPool),
-                      let outputBuffer = Self.makePixelBuffer(from: pool) else {
+                let stereoStart = ProcessInfo.processInfo.systemUptime
+                guard let stereoContentBuffer = Self.makePixelBuffer(from: stereoContentPool) else {
                     throw VideoConverterError.cannotCreateOutputBuffer
                 }
-
                 try renderer.render(
                     pixelBuffer: orientedBuffer,
                     depth: depth,
                     into: stereoContentBuffer,
                     strength: Float(contentWidth) * strengthFraction,
-                    convergence: convergence
+                    convergence: convergence,
+                    maxParallaxFraction: maxParallaxFraction,
+                    depthCurve: depthCurve
                 )
+                stereoRenderingSeconds += ProcessInfo.processInfo.systemUptime - stereoStart
+
+                let layoutStart = ProcessInfo.processInfo.systemUptime
+                guard let outputBuffer = Self.makePixelBuffer(from: pool) else {
+                    throw VideoConverterError.cannotCreateOutputBuffer
+                }
                 renderStereoContent(
                     stereoContentBuffer,
                     contentSize: contentSize,
                     into: outputBuffer
                 )
+                outputLayoutSeconds += ProcessInfo.processInfo.systemUptime - layoutStart
 
+                let encodingStart = ProcessInfo.processInfo.systemUptime
                 while !writerInput.isReadyForMoreMediaData {
                     try Task.checkCancellation()
                     Thread.sleep(forTimeInterval: 0.002)
@@ -272,16 +465,20 @@ final class VideoConverter {
                 guard adaptor.append(outputBuffer, withPresentationTime: relativeTime) else {
                     throw writer.error ?? VideoConverterError.appendFailed
                 }
+                encodingWaitAndAppendSeconds += ProcessInfo.processInfo.systemUptime
+                    - encodingStart
 
                 frameIndex += 1
                 progress(min(max(relativeTime.seconds / duration, 0), 0.99))
             }
         }
+        let frameLoopSeconds = ProcessInfo.processInfo.systemUptime - frameLoopStart
 
         if reader.status == .failed {
             throw reader.error ?? VideoConverterError.cannotStartReader
         }
 
+        let encodingFinalizationStart = ProcessInfo.processInfo.systemUptime
         writerInput.markAsFinished()
         let semaphore = DispatchSemaphore(value: 0)
         writer.finishWriting { semaphore.signal() }
@@ -292,11 +489,30 @@ final class VideoConverter {
         guard writer.status == .completed else {
             throw writer.error ?? VideoConverterError.appendFailed
         }
+        let encodingFinalizationSeconds = ProcessInfo.processInfo.systemUptime
+            - encodingFinalizationStart
+        let pipelineSeconds = ProcessInfo.processInfo.systemUptime - pipelineStart
         shouldKeepOutput = true
         progress(1)
         return SilentVideoResult(
             url: outputURL,
-            sourceTimelineOrigin: firstPresentationTime ?? .zero
+            sourceTimelineOrigin: firstPresentationTime ?? .zero,
+            timing: SilentVideoTiming(
+                pipelineSeconds: pipelineSeconds,
+                setupSeconds: pipelineSetupSeconds,
+                frameLoopSeconds: frameLoopSeconds,
+                frameReadSeconds: frameReadSeconds,
+                orientationAndScaleSeconds: orientationAndScaleSeconds,
+                depthInferenceSeconds: depthInferenceSeconds,
+                stereoRenderingSeconds: stereoRenderingSeconds,
+                outputLayoutSeconds: outputLayoutSeconds,
+                encodingWaitAndAppendSeconds: encodingWaitAndAppendSeconds,
+                encodingFinalizationSeconds: encodingFinalizationSeconds,
+                frameCount: frameIndex,
+                depthInferenceCount: depthInferenceCount,
+                contentWidth: contentWidth,
+                contentHeight: contentHeight
+            )
         )
     }
 

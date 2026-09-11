@@ -18,6 +18,8 @@ final class DepthProcessor {
         await convert(
             image,
             strengthFraction: throttle ? 0.018 : 0.025,
+            maxParallaxFraction: throttle ? 0.018 : 0.025,
+            depthCurve: 1.0,
             label: throttle ? "Depth Anything V2 · Throttled" : "Depth Anything V2"
         )
     }
@@ -29,6 +31,8 @@ final class DepthProcessor {
         await convert(
             image,
             strengthFraction: throttle ? 0.025 : 0.040,
+            maxParallaxFraction: throttle ? 0.025 : 0.035,
+            depthCurve: throttle ? 1.0 : 0.8,
             label: throttle
                 ? "Depth Anything V2 · Relief throttled"
                 : "Depth Anything V2 · Relief"
@@ -38,6 +42,8 @@ final class DepthProcessor {
     private func convert(
         _ image: UIImage,
         strengthFraction: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float,
         label: String
     ) async -> DepthProcessingOutput {
         let input = throttle ? image.normalized(maxDimension: 768) : image
@@ -45,7 +51,9 @@ final class DepthProcessor {
             let result = try await ProcessingService.shared.convertImage(
                 input,
                 strengthFraction: strengthFraction,
-                convergence: 0.5
+                convergence: 0.5,
+                maxParallaxFraction: maxParallaxFraction,
+                depthCurve: depthCurve
             )
             return DepthProcessingOutput(sbs: result.stereo, engineLabel: label)
         } catch {

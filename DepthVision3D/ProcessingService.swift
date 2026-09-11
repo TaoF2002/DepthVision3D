@@ -3,6 +3,32 @@ import UIKit
 struct ImageConversionResult {
     let depth: UIImage
     let stereo: UIImage
+    let metrics: ImageProcessingMetrics
+}
+
+struct ImageProcessingMetrics {
+    let totalSeconds: TimeInterval
+    let enginePreparationSeconds: TimeInterval
+    let normalizationSeconds: TimeInterval
+    let depthInferenceSeconds: TimeInterval
+    let stereoRenderingSeconds: TimeInterval
+    let outputLayoutSeconds: TimeInterval
+
+    var report: String {
+        [
+            "图片性能统计",
+            "总耗时：\(Self.seconds(totalSeconds))",
+            "引擎准备：\(Self.seconds(enginePreparationSeconds))",
+            "图片归一化：\(Self.seconds(normalizationSeconds))",
+            "V2推理：\(Self.seconds(depthInferenceSeconds))",
+            "Metal SBS：\(Self.seconds(stereoRenderingSeconds))",
+            "深度预览与3840×1080布局：\(Self.seconds(outputLayoutSeconds))"
+        ].joined(separator: "\n")
+    }
+
+    private static func seconds(_ value: TimeInterval) -> String {
+        String(format: "%.3f秒", value)
+    }
 }
 
 /// View1 3D mode is treated as a 3840×1080 Full-SBS canvas. Each eye owns a
@@ -125,40 +151,71 @@ actor ProcessingService {
     func convertImage(
         _ image: UIImage,
         strengthFraction: Float,
-        convergence: Float
+        convergence: Float,
+        maxParallaxFraction: Float,
+        depthCurve: Float
     ) throws -> ImageConversionResult {
+        let totalStart = ProcessInfo.processInfo.systemUptime
+
+        let preparationStart = ProcessInfo.processInfo.systemUptime
         try prepare()
+        let enginePreparationSeconds = ProcessInfo.processInfo.systemUptime - preparationStart
+
+        let normalizationStart = ProcessInfo.processInfo.systemUptime
         guard let estimator, let renderer,
               let cgImage = image.normalized(maxDimension: 1920).cgImage else {
             throw StereoRendererError.cannotCreateImage
         }
+        let normalizationSeconds = ProcessInfo.processInfo.systemUptime - normalizationStart
 
+        let depthStart = ProcessInfo.processInfo.systemUptime
         let depth: DepthFrame
         do {
             depth = try estimator.predict(cgImage: cgImage)
         } catch {
             throw ProcessingServiceError.depthPrediction(error)
         }
+        let depthInferenceSeconds = ProcessInfo.processInfo.systemUptime - depthStart
+
         let strength = Float(cgImage.width) * strengthFraction
+        let stereoStart = ProcessInfo.processInfo.systemUptime
         let stereoCG: CGImage
         do {
             stereoCG = try renderer.render(
                 image: cgImage,
                 depth: depth,
                 strength: strength,
-                convergence: convergence
+                convergence: convergence,
+                maxParallaxFraction: maxParallaxFraction,
+                depthCurve: depthCurve
             )
         } catch {
             throw ProcessingServiceError.stereoRendering(error)
         }
+        let stereoRenderingSeconds = ProcessInfo.processInfo.systemUptime - stereoStart
+
+        let outputStart = ProcessInfo.processInfo.systemUptime
         guard let depthCG = depth.grayscaleCGImage() else {
             throw StereoRendererError.cannotCreateImage
         }
 
         let view1Stereo = try View1SBSLayout.format(stereoCGImage: stereoCG)
+        let outputLayoutSeconds = ProcessInfo.processInfo.systemUptime - outputStart
+        let totalSeconds = ProcessInfo.processInfo.systemUptime - totalStart
+        let metrics = ImageProcessingMetrics(
+            totalSeconds: totalSeconds,
+            enginePreparationSeconds: enginePreparationSeconds,
+            normalizationSeconds: normalizationSeconds,
+            depthInferenceSeconds: depthInferenceSeconds,
+            stereoRenderingSeconds: stereoRenderingSeconds,
+            outputLayoutSeconds: outputLayoutSeconds
+        )
+        print("[DepthVision3D]\n\(metrics.report)")
+
         return ImageConversionResult(
             depth: UIImage(cgImage: depthCG),
-            stereo: view1Stereo
+            stereo: view1Stereo,
+            metrics: metrics
         )
     }
 }

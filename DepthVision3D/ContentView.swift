@@ -1,4 +1,5 @@
 import AVKit
+import Foundation
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -40,6 +41,9 @@ struct ContentView: View {
                     }
 
                     statusCard
+                    if let report = model.performanceReport {
+                        performanceCard(report)
+                    }
                 }
                 .padding()
             }
@@ -84,25 +88,102 @@ struct ContentView: View {
     }
 
     private var settings: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("立体强度")
-                Slider(value: $model.strength, in: 0.005...0.06)
-                Text("\(model.strength * 100, specifier: "%.1f")%")
-                    .monospacedDigit()
-                    .frame(width: 48, alignment: .trailing)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Label("3D 模式", systemImage: "cube.transparent")
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                Menu {
+                    ForEach(StereoPreset.allCases) { preset in
+                        Button {
+                            model.applyStereoPreset(preset)
+                        } label: {
+                            if model.selectedStereoPreset == preset {
+                                Label(preset.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(preset.rawValue)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(model.selectedStereoPreset?.rawValue ?? "自定义")
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
+                }
+                .tint(.cyan)
             }
-            HStack {
-                Text("聚焦平面")
-                Slider(value: $model.convergence, in: 0.15...0.85)
-                Text("\(model.convergence, specifier: "%.2f")")
-                    .monospacedDigit()
-                    .frame(width: 48, alignment: .trailing)
-            }
+
+            Divider()
+
+            parameterSlider(
+                title: "立体强度",
+                value: Binding(
+                    get: { model.strength },
+                    set: { model.updateStrength($0) }
+                ),
+                range: 0.005...0.060,
+                step: 0.001,
+                displayValue: String(format: "%.1f%%", model.strength * 100)
+            )
+            parameterSlider(
+                title: "聚焦平面",
+                value: Binding(
+                    get: { model.convergence },
+                    set: { model.updateConvergence($0) }
+                ),
+                range: 0.15...0.85,
+                step: 0.01,
+                displayValue: String(format: "%.2f", model.convergence)
+            )
+            parameterSlider(
+                title: "最大视差",
+                value: Binding(
+                    get: { model.maxParallax },
+                    set: { model.updateMaxParallax($0) }
+                ),
+                range: 0.005...0.060,
+                step: 0.001,
+                displayValue: String(format: "%.1f%%", model.maxParallax * 100)
+            )
+            parameterSlider(
+                title: "深度曲线",
+                value: Binding(
+                    get: { model.depthCurve },
+                    set: { model.updateDepthCurve($0) }
+                ),
+                range: 0.60...1.40,
+                step: 0.05,
+                displayValue: String(format: "%.2f", model.depthCurve)
+            )
         }
         .font(.subheadline)
         .padding()
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func parameterSlider(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        displayValue: String
+    ) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .frame(width: 72, alignment: .leading)
+            Slider(
+                value: value,
+                in: range,
+                step: step
+            )
+            Text(displayValue)
+                .monospacedDigit()
+                .frame(width: 52, alignment: .trailing)
+        }
     }
 
     private var externalDisplayCard: some View {
@@ -307,6 +388,23 @@ struct ContentView: View {
         }
         .padding()
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func performanceCard(_ report: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("本次性能统计", systemImage: "gauge.with.dots.needle.67percent")
+                .font(.subheadline.weight(.semibold))
+            Text(report)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding()
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 14)
+        )
     }
 }
 
